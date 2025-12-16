@@ -1,17 +1,17 @@
 # Web Framework
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
 
 # Environment & Config
 python-dotenv==1.0.0
-pydantic==2.5.0
-pydantic-settings==2.1.0
+pydantic==2.10.3
+pydantic-settings==2.6.1
 
 # GitHub Integration
 PyGithub==2.1.1
 
 # AI Integration
-anthropic==0.7.1
+google-genai==1.55.0
 
 # GCP
 google-cloud-secret-manager==2.16.4

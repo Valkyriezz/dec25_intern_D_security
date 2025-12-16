@@ -68,6 +68,34 @@ class GitHubClient:
             raise
 
 
+# Helper function for testing and verification
+def display_repo_info(repo) -> None:
+    """
+    Display comprehensive repository information
+    
+    Helper function to show repo metadata in a formatted way.
+    Useful for testing and debugging.
+    
+    Args:
+        repo: PyGithub Repository object
+    """
+    print(f"\n📦 Repository Information:")
+    print(f"   {'='*56}")
+    print(f"   Name:        {repo.name}")
+    print(f"   Full Name:   {repo.full_name}")
+    print(f"   Owner:       {repo.owner.login}")
+    print(f"   Private:     {repo.private}")
+    print(f"   Description: {repo.description or 'No description'}")
+    print(f"   Language:    {repo.language or 'Not specified'}")
+    print(f"   Stars:       {repo.stargazers_count:,}")
+    print(f"   Forks:       {repo.forks_count:,}")
+    print(f"   Open Issues: {repo.open_issues_count:,}")
+    print(f"   Created:     {repo.created_at.strftime('%Y-%m-%d')}")
+    print(f"   Updated:     {repo.updated_at.strftime('%Y-%m-%d')}")
+    print(f"   URL:         {repo.html_url}")
+    print(f"   {'='*56}\n")
+
+
 if __name__ == "__main__":
     print("✅ GitHub client module loaded successfully")
-    print("Use test_commit2_1.py to test repository access")
+    print("Use test_commit2_2.py to test repository verification helper")

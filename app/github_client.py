@@ -68,6 +68,43 @@ class GitHubClient:
             logger.error(f"❌ Failed to access repo {repo_name}: {e}")
             raise
     
+    # Use this to fetch PR metadata before deeper operations like file scanning or status updates
+    def get_pr_details(self, repo_name: str, pr_number: int) -> Dict:
+        """
+        Get detailed information about a Pull Request
+        
+        Args:
+            repo_name: Full repo name
+            pr_number: Pull request number
+            
+        Returns:
+            Dictionary with PR details
+        """
+        try:
+            repo = self.get_repo(repo_name)
+            pr = repo.get_pull(pr_number)
+            details = {
+                'number': pr.number,
+                'title': pr.title,
+                'body': pr.body or '',
+                'author': pr.user.login,
+                'author_avatar': pr.user.avatar_url,
+                'base_branch': pr.base.ref,
+                'head_branch': pr.head.ref,
+                'sha': pr.head.sha,
+                'url': pr.html_url,
+                'state': pr.state,
+                'mergeable': pr.mergeable,
+                'created_at': pr.created_at.isoformat(),
+                'updated_at': pr.updated_at.isoformat()
+            }
+            logger.info(f"✅ Retrieved details for PR #{pr_number}")
+            return details
+        except GithubException as e:
+            logger.error(f"❌ Failed to get PR details: {e}")
+            raise
+    
+    # Critical for scanning code changes; uses PR details for context
     def get_pr_files(self, repo_name: str, pr_number: int) -> List[Dict]:
         """
         Get list of files changed in a Pull Request with their diffs
@@ -137,41 +174,7 @@ class GitHubClient:
             logger.error(f"❌ Failed to fetch PR files: {e}")
             raise
     
-    def get_pr_details(self, repo_name: str, pr_number: int) -> Dict:
-        """
-        Get detailed information about a Pull Request
-        
-        Args:
-            repo_name: Full repo name
-            pr_number: Pull request number
-            
-        Returns:
-            Dictionary with PR details
-        """
-        try:
-            repo = self.get_repo(repo_name)
-            pr = repo.get_pull(pr_number)
-            details = {
-                'number': pr.number,
-                'title': pr.title,
-                'body': pr.body or '',
-                'author': pr.user.login,
-                'author_avatar': pr.user.avatar_url,
-                'base_branch': pr.base.ref,
-                'head_branch': pr.head.ref,
-                'sha': pr.head.sha,
-                'url': pr.html_url,
-                'state': pr.state,
-                'mergeable': pr.mergeable,
-                'created_at': pr.created_at.isoformat(),
-                'updated_at': pr.updated_at.isoformat()
-            }
-            logger.info(f"✅ Retrieved details for PR #{pr_number}")
-            return details
-        except GithubException as e:
-            logger.error(f"❌ Failed to get PR details: {e}")
-            raise
-    
+    # For providing feedback after scans
     def post_comment(self, repo_name: str, pr_number: int, comment: str) -> bool:
         """
         Post a comment on a Pull Request
@@ -194,6 +197,7 @@ class GitHubClient:
             logger.error(f"❌ Failed to post comment: {e}")
             return False
     
+    # For gating merges based on scan results; requires SHA from get_pr_details
     def set_commit_status(
         self,
         repo_name: str,

@@ -137,6 +137,41 @@ class GitHubClient:
             logger.error(f"❌ Failed to fetch PR files: {e}")
             raise
     
+    def get_pr_details(self, repo_name: str, pr_number: int) -> Dict:
+        """
+        Get detailed information about a Pull Request
+        
+        Args:
+            repo_name: Full repo name
+            pr_number: Pull request number
+            
+        Returns:
+            Dictionary with PR details
+        """
+        try:
+            repo = self.get_repo(repo_name)
+            pr = repo.get_pull(pr_number)
+            details = {
+                'number': pr.number,
+                'title': pr.title,
+                'body': pr.body or '',
+                'author': pr.user.login,
+                'author_avatar': pr.user.avatar_url,
+                'base_branch': pr.base.ref,
+                'head_branch': pr.head.ref,
+                'sha': pr.head.sha,
+                'url': pr.html_url,
+                'state': pr.state,
+                'mergeable': pr.mergeable,
+                'created_at': pr.created_at.isoformat(),
+                'updated_at': pr.updated_at.isoformat()
+            }
+            logger.info(f"✅ Retrieved details for PR #{pr_number}")
+            return details
+        except GithubException as e:
+            logger.error(f"❌ Failed to get PR details: {e}")
+            raise
+    
     @staticmethod
     def _is_text_file(filename: str) -> bool:
         """

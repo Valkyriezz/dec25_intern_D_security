@@ -194,6 +194,54 @@ class GitHubClient:
             logger.error(f"❌ Failed to post comment: {e}")
             return False
     
+    def set_commit_status(
+        self,
+        repo_name: str,
+        sha: str,
+        state: str,
+        description: str,
+        context: str = "ATF Sentinel Security Scan",
+        target_url: Optional[str] = None
+    ) -> bool:
+        """
+        Set commit status (controls PR merge button)
+        This is THE critical function that blocks PRs!
+        
+        Args:
+            repo_name: Full repo name
+            sha: Commit SHA (from PR head)
+            state: 'success' | 'failure' | 'pending' | 'error'
+            description: Status description (max 140 chars)
+            context: Status check name (appears in PR)
+            target_url: Optional URL to link to (e.g., dashboard)
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            repo = self.get_repo(repo_name)
+            commit = repo.get_commit(sha)
+            # Truncate description if too long (GitHub limit is 140 chars)
+            description = description[:140] if len(description) > 140 else description
+            # Set the status
+            commit.create_status(
+                state=state,
+                description=description,
+                context=context,
+                target_url=target_url
+            )
+            emoji = {
+                'success': '✅',
+                'failure': '❌',
+                'pending': '⏳',
+                'error': '⚠️'
+            }.get(state, '📌')
+            logger.info(f"{emoji} Set commit status: {state} - {description}")
+            return True
+        except GithubException as e:
+            logger.error(f"❌ Failed to set commit status: {e}")
+            return False
+    
     @staticmethod
     def _is_text_file(filename: str) -> bool:
         """

@@ -172,6 +172,28 @@ class GitHubClient:
             logger.error(f"❌ Failed to get PR details: {e}")
             raise
     
+    def post_comment(self, repo_name: str, pr_number: int, comment: str) -> bool:
+        """
+        Post a comment on a Pull Request
+        
+        Args:
+            repo_name: Full repo name (e.g., 'myorg/myrepo')
+            pr_number: Pull request number
+            comment: Comment text (supports markdown)
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            repo = self.get_repo(repo_name)
+            pr = repo.get_pull(pr_number)
+            pr.create_issue_comment(comment)
+            logger.info(f"✅ Posted comment to PR #{pr_number} in {repo_name}")
+            return True
+        except GithubException as e:
+            logger.error(f"❌ Failed to post comment: {e}")
+            return False
+    
     @staticmethod
     def _is_text_file(filename: str) -> bool:
         """

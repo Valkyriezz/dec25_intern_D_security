@@ -1,13 +1,23 @@
 # app/pattern_scanner.py
 
 import re
+import logging
 from app.patterns import SECRET_PATTERNS, PII_PATTERNS, IGNORE_MARKER
+
+# Setup logging
+logger = logging.getLogger(__name__)
 
 def scan_diff_for_patterns(diff_text):
     """
-    Scans the git diff for regex matches.
-    Only looks at added lines (+).
-    Ignores lines with 'test-data' marker.
+    Scans the git diff for regex matches (Secrets & PII).
+    
+    Logic:
+    - Only looks at added lines (lines starting with '+').
+    - Ignores lines that contain the IGNORE_MARKER.
+    - Skips metadata and binary file warnings.
+
+    Returns:
+        list of dict: A list of found issues with type, severity, rule, line, and description.
     """
     found_issues = []
     
@@ -42,18 +52,27 @@ def scan_diff_for_patterns(diff_text):
         for rule_name, pattern in ALL_PATTERNS.items():
             try:
                 if re.search(pattern, clean_line):
-                    # Determine Severity based on dictionary source
+                    # Determine Severity
                     severity = "CRITICAL" if rule_name in SECRET_PATTERNS else "HIGH"
                     
-                    found_issues.append({
+                    # Create the issue object
+                    issue = {
                         "type": "Pattern Violation",
                         "severity": severity,
                         "rule": rule_name,
-                        "line": line_num,
+                        "line": line_num + 1,
                         "description": f"Detected potential {rule_name}",
-                        "fix_code": "Use Environment Variables (os.environ) instead of hardcoding."
-                    })
-            except re.error:
+                    }
+
+                    # Smart Fix Logic: Only suggest env vars for Secrets
+                    if rule_name in SECRET_PATTERNS:
+                        issue["fix_code"] = "Use Environment Variables (os.environ) instead of hardcoding."
+                    
+                    found_issues.append(issue)
+
+            except re.error as e:
+                # Log the error but continue scanning other patterns
+                logger.error(f"Regex error in rule {rule_name}: {e}")
                 continue
 
     return found_issues

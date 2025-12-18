@@ -12,6 +12,7 @@ import json
 from typing import Optional
 from app.config import config
 from app.github_client import GitHubClient
+from app.scanner import run_security_scan
 
 # Configure logging
 logging.basicConfig(
@@ -235,6 +236,7 @@ async def github_webhook(
         pr_author = pr_data['user']['login']
         pr_title = pr_data['title']
         pr_sha = pr_data['head']['sha']
+        pr_url = pr_data['html_url']
         
         logger.info(f"📋 PR Details:")
         logger.info(f"   Repository: {repo_name}")
@@ -300,33 +302,75 @@ async def github_webhook(
         
         logger.info(f"✅ Found {len(pr_files)} files to scan")
         
-        # Step 10: Log file information (scanning will be added in next commit)
-        logger.info(f"📄 Files to be scanned:")
-        for i, file in enumerate(pr_files[:5], 1):
-            logger.info(f"   {i}. {file['filename']} (+{file['additions']} -{file['deletions']})")
-        if len(pr_files) > 5:
-            logger.info(f"   ... and {len(pr_files) - 5} more files")
+        # Step 10: Run security scan
+        logger.info("🔍 Running security scan...")
+        metadata = {
+            "repo": repo_name,
+            "branch": pr_data['head']['ref'],
+            "author": pr_author,
+            "pr_url": pr_url
+        }
         
-        # Placeholder: Set success status
-        github_client.set_commit_status(
-            repo_name,
-            pr_sha,
-            'success',
-            f'✅ Ready to scan {len(pr_files)} files'
-        )
+        try:
+            scan_result = run_security_scan(pr_files, metadata)
+        except Exception as e:
+            logger.error(f"❌ Scanner failed: {e}")
+            github_client.set_commit_status(
+                repo_name,
+                pr_sha,
+                'error',
+                '⚠️ Scanner error'
+            )
+            raise HTTPException(status_code=500, detail=f"Scanner error: {str(e)}")
         
-        logger.info(f"✅ Successfully prepared PR #{pr_number} for scanning")
+        # Step 11: Process scan results
+        action_taken = scan_result.get('action', 'PASS')
+        severity = scan_result.get('severity', 'low')
+        issues_count = len(scan_result.get('issues', []))
+        
+        logger.info(f"📊 Scan Results: {action_taken} | Severity: {severity} | Issues: {issues_count}")
+        
+        # Step 12: Set commit status based on results
+        if action_taken == 'BLOCK':
+            github_client.set_commit_status(
+                repo_name,
+                pr_sha,
+                'failure',
+                f'🚫 Security issues found ({issues_count} critical)'
+            )
+            status_code = 'failure'
+        elif action_taken == 'WARN':
+            github_client.set_commit_status(
+                repo_name,
+                pr_sha,
+                'success',
+                f'⚠️ Warnings found ({issues_count} issues)'
+            )
+            status_code = 'success'
+        else:
+            github_client.set_commit_status(
+                repo_name,
+                pr_sha,
+                'success',
+                '✅ Security scan passed'
+            )
+            status_code = 'success'
+        
+        logger.info(f"✅ Successfully processed PR #{pr_number}")
         
         return {
             "status": "success",
-            "message": "PR files fetched successfully",
+            "message": "Security scan completed",
             "repo": repo_name,
             "pr": pr_number,
             "author": pr_author,
-            "files_count": len(pr_files),
-            "action": action,
-            "sha": pr_sha[:8],
-            "note": "Scanner integration pending"
+            "scan_result": {
+                "action": action_taken,
+                "severity": severity,
+                "issues_count": issues_count,
+                "status": status_code
+            },
+            "files_scanned": len(pr_files)
         }
         
     except HTTPException:

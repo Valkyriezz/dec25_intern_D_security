@@ -11,6 +11,7 @@ import logging
 import json
 from typing import Optional
 from app.config import config
+from app.github_client import GitHubClient
 
 # Configure logging
 logging.basicConfig(
@@ -27,6 +28,15 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc"
 )
+
+# Initialize GitHub client
+try:
+    github_client = GitHubClient(config.github_token)
+    logger.info("✅ GitHub client initialized")
+except Exception as e:
+    logger.error(f"❌ Failed to initialize GitHub client: {e}")
+    github_client = None
+
 
 @app.on_event("startup")
 async def startup_event():
@@ -63,13 +73,14 @@ async def health_check():
    
     health_status = {
         "status": "healthy",
+        "github_client": github_client is not None,
         "secrets_loaded": bool(config.github_token),
         "allowed_repos": len(config.allowed_repos),
         "version": "1.0.0"
     }
    
     # Check if all critical components are working
-    if not health_status["secrets_loaded"]:
+    if not all([health_status["github_client"], health_status["secrets_loaded"]]):
         health_status["status"] = "degraded"
         return JSONResponse(status_code=503, content=health_status)
    
@@ -249,18 +260,73 @@ async def github_webhook(
                 "scanned_actions": ["opened", "synchronize", "reopened"]
             }
         
-        # Step 8: Return success for now (integration points will be added later)
-        logger.info(f"✅ Webhook validated successfully for PR #{pr_number}")
+        # Step 8: Set initial "pending" status
+        logger.info("⏳ Setting pending status...")
+        github_client.set_commit_status(
+            repo_name,
+            pr_sha,
+            'pending',
+            '🔍 Security scan in progress...'
+        )
+        
+        # Step 9: Fetch PR files and diffs
+        logger.info(f"📁 Fetching files from PR #{pr_number}...")
+        try:
+            pr_files = github_client.get_pr_files(repo_name, pr_number)
+        except Exception as e:
+            logger.error(f"❌ Failed to fetch PR files: {e}")
+            github_client.set_commit_status(
+                repo_name,
+                pr_sha,
+                'error',
+                '⚠️ Failed to fetch PR files'
+            )
+            raise HTTPException(status_code=500, detail=f"Failed to fetch PR files: {str(e)}")
+        
+        if not pr_files:
+            logger.warning(f"⚠️ No text files to scan in PR #{pr_number}")
+            github_client.set_commit_status(
+                repo_name,
+                pr_sha,
+                'success',
+                '✅ No files to scan'
+            )
+            return {
+                "status": "success",
+                "message": "No text files to scan",
+                "pr": pr_number,
+                "repo": repo_name
+            }
+        
+        logger.info(f"✅ Found {len(pr_files)} files to scan")
+        
+        # Step 10: Log file information (scanning will be added in next commit)
+        logger.info(f"📄 Files to be scanned:")
+        for i, file in enumerate(pr_files[:5], 1):
+            logger.info(f"   {i}. {file['filename']} (+{file['additions']} -{file['deletions']})")
+        if len(pr_files) > 5:
+            logger.info(f"   ... and {len(pr_files) - 5} more files")
+        
+        # Placeholder: Set success status
+        github_client.set_commit_status(
+            repo_name,
+            pr_sha,
+            'success',
+            f'✅ Ready to scan {len(pr_files)} files'
+        )
+        
+        logger.info(f"✅ Successfully prepared PR #{pr_number} for scanning")
         
         return {
             "status": "success",
-            "message": "Webhook received and validated",
+            "message": "PR files fetched successfully",
             "repo": repo_name,
             "pr": pr_number,
             "author": pr_author,
+            "files_count": len(pr_files),
             "action": action,
             "sha": pr_sha[:8],
-            "note": "Scanning logic will be integrated in next commits"
+            "note": "Scanner integration pending"
         }
         
     except HTTPException:
@@ -269,6 +335,18 @@ async def github_webhook(
     except Exception as e:
         # Log unexpected errors
         logger.error(f"❌ Unexpected error processing webhook: {e}", exc_info=True)
+        
+        # Try to set error status if we have the info
+        try:
+            if 'repo_name' in locals() and 'pr_sha' in locals():
+                github_client.set_commit_status(
+                    repo_name,
+                    pr_sha,
+                    'error',
+                    '⚠️ Internal error during scan'
+                )
+        except:
+            pass
         
         raise HTTPException(
             status_code=500,

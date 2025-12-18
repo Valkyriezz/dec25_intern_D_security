@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 import hmac
 import hashlib
 import logging
+import json
 from typing import Optional
 from app.config import config
 
@@ -160,6 +161,119 @@ def is_repo_allowed(repo_name: str) -> bool:
     logger.warning(f"⚠️ Repo {repo_name} not in allowed list")
     logger.debug(f"Allowed patterns: {allowed_repos}")
     return False
+
+
+@app.post("/webhook/github")
+async def github_webhook(
+    request: Request,
+    x_hub_signature_256: Optional[str] = Header(None),
+    x_github_event: Optional[str] = Header(None),
+    x_github_delivery: Optional[str] = Header(None)
+):
+    """
+    GitHub webhook endpoint - receives PR events
+    
+    This is the MAIN endpoint that GitHub calls when PRs are created/updated!
+    
+    Headers:
+        X-Hub-Signature-256: HMAC signature for verification
+        X-GitHub-Event: Type of event (pull_request, push, etc.)
+        X-GitHub-Delivery: Unique delivery ID
+        
+    Returns:
+        JSON response with processing status
+    """
+    
+    logger.info(f"📨 Received webhook - Event: {x_github_event}, Delivery: {x_github_delivery}")
+    
+    try:
+        # Step 1: Read raw payload (needed for signature verification)
+        payload_bytes = await request.body()
+        
+        # Step 2: Verify signature (SECURITY CHECK!)
+        if not verify_github_signature(payload_bytes, x_hub_signature_256):
+            logger.error("❌ Invalid webhook signature - rejecting request")
+            raise HTTPException(
+                status_code=401, 
+                detail="Invalid signature - webhook authentication failed"
+            )
+        
+        logger.info("✅ Webhook signature verified")
+        
+        # Step 3: Parse JSON payload
+        try:
+            payload = json.loads(payload_bytes.decode('utf-8'))
+        except json.JSONDecodeError as e:
+            logger.error(f"❌ Invalid JSON payload: {e}")
+            raise HTTPException(status_code=400, detail="Invalid JSON payload")
+        
+        # Step 4: Only process pull_request events
+        if x_github_event != "pull_request":
+            logger.info(f"⏭️ Ignoring {x_github_event} event (only processing pull_request)")
+            return {
+                "status": "ignored",
+                "reason": f"Event type '{x_github_event}' is not processed",
+                "processed_events": ["pull_request"]
+            }
+        
+        # Step 5: Extract PR information
+        action = payload.get('action')
+        repo_name = payload['repository']['full_name']
+        pr_number = payload['number']
+        pr_data = payload['pull_request']
+        pr_author = pr_data['user']['login']
+        pr_title = pr_data['title']
+        pr_sha = pr_data['head']['sha']
+        
+        logger.info(f"📋 PR Details:")
+        logger.info(f"   Repository: {repo_name}")
+        logger.info(f"   PR #{pr_number}: {pr_title}")
+        logger.info(f"   Author: @{pr_author}")
+        logger.info(f"   Action: {action}")
+        logger.info(f"   SHA: {pr_sha[:8]}...")
+        
+        # Step 6: Check if repo is allowed
+        if not is_repo_allowed(repo_name):
+            logger.warning(f"❌ Repository {repo_name} not authorized")
+            raise HTTPException(
+                status_code=403,
+                detail=f"Repository '{repo_name}' is not in the allowed list"
+            )
+        
+        # Step 7: Only scan on relevant actions
+        if action not in ['opened', 'synchronize', 'reopened']:
+            logger.info(f"⏭️ Ignoring action '{action}' (only scanning: opened, synchronize, reopened)")
+            return {
+                "status": "ignored",
+                "reason": f"Action '{action}' does not trigger scanning",
+                "scanned_actions": ["opened", "synchronize", "reopened"]
+            }
+        
+        # Step 8: Return success for now (integration points will be added later)
+        logger.info(f"✅ Webhook validated successfully for PR #{pr_number}")
+        
+        return {
+            "status": "success",
+            "message": "Webhook received and validated",
+            "repo": repo_name,
+            "pr": pr_number,
+            "author": pr_author,
+            "action": action,
+            "sha": pr_sha[:8],
+            "note": "Scanning logic will be integrated in next commits"
+        }
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        # Log unexpected errors
+        logger.error(f"❌ Unexpected error processing webhook: {e}", exc_info=True)
+        
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal error: {str(e)}"
+        )
 
 
 # For local testing

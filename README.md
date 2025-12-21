@@ -235,8 +235,10 @@ MIT License - see LICENSE file for details.
 
 ## Author
 
-**ANIRUDH S J** - ATF Inc.
-**ABHAY SINGH** - ATF Inc.
+## Author
+
+- **ANIRUDH S J** – ATF Inc.
+- **ABHAY SINGH** – ATF Inc.
 
 ---
 

@@ -127,6 +127,8 @@ def get_engine():
     """Get the SQLAlchemy engine, initializing if needed."""
     if _engine is None:
         init_engine()
+    if _engine is None:
+        raise RuntimeError("Failed to initialize database engine")
     return _engine
 
 
@@ -134,6 +136,8 @@ def get_session_local():
     """Get the session factory."""
     if _SessionLocal is None:
         init_engine()
+    if _SessionLocal is None:
+        raise RuntimeError("Failed to initialize database session factory")
     return _SessionLocal
 
 

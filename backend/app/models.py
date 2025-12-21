@@ -58,9 +58,11 @@ class Repository(Base):
     @property
     def pass_rate(self) -> float:
         """Calculate pass rate percentage"""
-        if self.total_scans == 0:
+        total_scans = getattr(self, 'total_scans', 0) or 0
+        blocked_prs = getattr(self, 'blocked_prs', 0) or 0
+        if total_scans == 0:
             return 100.0
-        return round(((self.total_scans - self.blocked_prs) / self.total_scans) * 100, 2)
+        return round(((total_scans - blocked_prs) / total_scans) * 100, 2)
 
 
 class Engineer(Base):
@@ -102,7 +104,8 @@ class Engineer(Base):
         Calculate security score based on PR history.
         Higher score = better security practices.
         """
-        if self.total_prs == 0:
+        total_prs = getattr(self, 'total_prs', 0) or 0
+        if total_prs == 0:
             self.security_score = 100.0
             return
         
@@ -110,18 +113,24 @@ class Engineer(Base):
         score = 100.0
         
         # Deduct for blocked PRs (major penalty)
-        score -= (self.blocked_prs / self.total_prs) * 40
+        blocked_prs = getattr(self, 'blocked_prs', 0) or 0
+        score -= (blocked_prs / total_prs) * 40
         
         # Deduct for warned PRs (minor penalty)
-        score -= (self.warned_prs / self.total_prs) * 15
+        warned_prs = getattr(self, 'warned_prs', 0) or 0
+        score -= (warned_prs / total_prs) * 15
         
         # Bonus for fixing issues
-        if self.total_issues_introduced > 0:
-            fix_rate = self.issues_fixed / self.total_issues_introduced
+        total_issues_introduced = getattr(self, 'total_issues_introduced', 0) or 0
+        if total_issues_introduced > 0:
+            issues_fixed = getattr(self, 'issues_fixed', 0) or 0
+            fix_rate = issues_fixed / total_issues_introduced
             score += fix_rate * 10
         
         # Clean PR bonus
-        clean_rate = self.clean_prs / self.total_prs
+        clean_prs = getattr(self, 'clean_prs', 0) or 0
+        clean_rate = clean_prs / total_prs
+
         score += clean_rate * 5
         
         self.security_score = max(0.0, min(100.0, round(score, 2)))
@@ -261,14 +270,18 @@ class DailyMetrics(Base):
     @property
     def pass_rate(self) -> float:
         """Calculate pass rate percentage"""
-        if self.total_scans == 0:
+        total_scans = getattr(self, 'total_scans', 0) or 0
+        if total_scans == 0:
             return 100.0
-        return round((self.passed_scans / self.total_scans) * 100, 2)
+        passed_scans = getattr(self, 'passed_scans', 0) or 0
+        return round((passed_scans / total_scans) * 100, 2)
     
     @property
     def block_rate(self) -> float:
         """Calculate block rate percentage"""
-        if self.total_scans == 0:
+        total_scans = getattr(self, 'total_scans', 0) or 0
+        if total_scans == 0:
             return 0.0
-        return round((self.blocked_scans / self.total_scans) * 100, 2)
+        blocked_scans = getattr(self, 'blocked_scans', 0) or 0
+        return round((blocked_scans / total_scans) * 100, 2)
 

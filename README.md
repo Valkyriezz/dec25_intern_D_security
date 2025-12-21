@@ -241,8 +241,6 @@ MIT License - see LICENSE file for details.
 
 
 - **ANIRUDH S J** – ATF Inc.
-- **ABHAY SINGH** – ATF Inc.
-- **VANSHIKHA SRI** – ATF Inc.
 
 ---
 

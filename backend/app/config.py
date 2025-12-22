@@ -50,22 +50,48 @@ class Config:
         allowed_repos_env = os.getenv('ALLOWED_REPOS', '').strip()
         if allowed_repos_env:
             try:
+                # Try parsing as JSON first
                 self.allowed_repos = json.loads(allowed_repos_env)
             except json.JSONDecodeError:
-                logger.warning(f"⚠️ Invalid JSON in ALLOWED_REPOS, using default")
-                self.allowed_repos = ["testorg/*"]
+                # If not JSON, treat as comma-separated string or single value
+                if ',' in allowed_repos_env:
+                    self.allowed_repos = [repo.strip() for repo in allowed_repos_env.split(',')]
+                else:
+                    self.allowed_repos = [allowed_repos_env]
+                logger.info(f"✅ Parsed ALLOWED_REPOS as list: {self.allowed_repos}")
         else:
             self.allowed_repos = self._get_secret_list_safe('allowed-repos') or ["testorg/*"]
         
         # Database configuration
         self.cloud_sql_connection_name = os.getenv('CLOUD_SQL_CONNECTION_NAME', '')
         self.db_user = os.getenv('DB_USER', 'postgres')
-        self.db_pass = os.getenv('DB_PASS') or self._get_secret_safe('db-password')
         self.db_name = os.getenv('DB_NAME', 'atf_sentinel')
-        self.database_url = os.getenv(
-            'DATABASE_URL',
-            f'postgresql://{self.db_user}:{self.db_pass}@localhost:5432/{self.db_name}'
-        )
+        
+        # Get database URL - if provided, extract password from it
+        database_url = os.getenv('DATABASE_URL', '')
+        if database_url:
+            self.database_url = database_url
+            # Try to extract password from DATABASE_URL if DB_PASS not set
+            try:
+                # Format: postgresql://user:password@host:port/dbname
+                if '@' in database_url and ':' in database_url.split('@')[0]:
+                    url_part = database_url.split('@')[0]
+                    if '://' in url_part:
+                        auth_part = url_part.split('://')[1]
+                        if ':' in auth_part:
+                            self.db_pass = auth_part.split(':')[1]
+                        else:
+                            self.db_pass = os.getenv('DB_PASS', 'postgres')
+                    else:
+                        self.db_pass = os.getenv('DB_PASS', 'postgres')
+                else:
+                    self.db_pass = os.getenv('DB_PASS', 'postgres')
+            except Exception:
+                self.db_pass = os.getenv('DB_PASS', 'postgres')
+        else:
+            # If DATABASE_URL not set, try DB_PASS or secret, default to 'postgres' for local dev
+            self.db_pass = os.getenv('DB_PASS') or self._get_secret_safe('db-password') or 'postgres'
+            self.database_url = f'postgresql://{self.db_user}:{self.db_pass}@localhost:5432/{self.db_name}'
         
         # Gemini AI configuration
         self.gemini_api_key = os.getenv('GEMINI_API_KEY') or self._get_secret_safe('gemini-api-key')

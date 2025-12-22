@@ -783,12 +783,18 @@ async def github_webhook(
             raise HTTPException(status_code=503, detail="GitHub client not initialized")
         
         logger.info("⏳ Setting pending status...")
-        github_client.set_commit_status(
-            repo_name,
-            pr_sha,
-            'pending',
-            '🔍 Security scan in progress...'
-        )
+        # Validate SHA before setting status
+        if not pr_sha or len(pr_sha) < 7:
+            logger.warning(f"⚠️ Invalid commit SHA: {pr_sha}, skipping status update")
+        else:
+            status_set = github_client.set_commit_status(
+                repo_name,
+                pr_sha,
+                'pending',
+                '🔍 Security scan in progress...'
+            )
+            if not status_set:
+                logger.warning(f"⚠️ Failed to set pending status, continuing anyway...")
         
         logger.info(f"📁 Fetching files from PR #{pr_number}...")
         try:

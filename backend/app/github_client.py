@@ -244,6 +244,10 @@ class GitHubClient:
         Returns:
             True if successful, False otherwise
         """
+        if not sha or not isinstance(sha, str) or len(sha) < 7:
+            logger.error(f"❌ Invalid commit SHA: {sha}")
+            return False
+            
         try:
             repo = self.get_repo(repo_name)
             commit = repo.get_commit(sha)
@@ -264,8 +268,11 @@ class GitHubClient:
             }.get(state, '📌')
             logger.info(f"{emoji} Set commit status: {state} - {description}")
             return True
-        except GithubException as e:
-            logger.error(f"❌ Failed to set commit status: {e}")
+        except (GithubException, AssertionError, AttributeError) as e:
+            logger.error(f"❌ Failed to set commit status for SHA {sha[:7]}...: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"❌ Unexpected error setting commit status: {e}")
             return False
     
     @staticmethod

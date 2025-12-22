@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
+import sqlalchemy
 from datetime import datetime, timedelta
 import hmac
 import hashlib
@@ -77,6 +78,48 @@ async def startup_event():
     except Exception as e:
         logger.error(f"❌ Database initialization failed: {e}")
     
+    # Initialize allowed repositories in database
+    db = None
+    try:
+        db = next(get_db())
+        for repo_pattern in config.allowed_repos:
+            # Handle wildcard patterns (e.g., "org/*")
+            if repo_pattern.endswith('/*'):
+                org = repo_pattern[:-2]
+                # Check if any repo from this org exists
+                existing = db.query(Repository).filter(Repository.organization == org).first()
+                if not existing:
+                    logger.info(f"📝 Note: Repository pattern '{repo_pattern}' will be created on first scan")
+            else:
+                # Exact repo name - create entry if it doesn't exist
+                repo = db.query(Repository).filter(Repository.id == repo_pattern).first()
+                if not repo:
+                    try:
+                        org, name = repo_pattern.split('/', 1)
+                        new_repo = Repository(
+                            id=repo_pattern,
+                            name=name,
+                            organization=org,
+                            is_active=True,
+                            total_scans=0,
+                            total_issues=0,
+                            blocked_prs=0,
+                        )
+                        db.add(new_repo)
+                        logger.info(f"✅ Created repository entry: {repo_pattern}")
+                    except ValueError:
+                        logger.warning(f"⚠️ Invalid repo format '{repo_pattern}', skipping")
+        db.commit()
+        db.close()
+    except Exception as e:
+        logger.warning(f"⚠️ Could not initialize repositories: {e}")
+        if db is not None:
+            try:
+                db.rollback()
+                db.close()
+            except:
+                pass
+    
     # Validate configuration
     if config.validate():
         logger.info("✅ All configuration validated")
@@ -98,6 +141,7 @@ async def root():
         "endpoints": {
             "health": "/health",
             "webhook": "/webhook/github",
+            "webhook_diagnostics": "/api/webhook/diagnostics",
             "analytics": "/api/analytics/dashboard",
             "docs": "/docs"
         }
@@ -175,7 +219,7 @@ async def get_dashboard_stats(db: Session = Depends(get_db)):
         
         # Top engineers (security champions)
         top_engineers = db.query(Engineer).order_by(
-            desc(Engineer.security_score)
+            desc(Engineer.security_score)  # type: ignore
         ).limit(5).all()
         
         return {
@@ -222,18 +266,27 @@ async def get_repo_analytics(
     try:
         query = db.query(Repository)
         
-        # Apply sorting
-        sort_column = getattr(Repository, sort_by)
-        if order == "desc":
-            query = query.order_by(desc(sort_column))
+        # Apply sorting - handle pass_rate specially as it's a property
+        if sort_by == "pass_rate":
+            # Sort by pass_rate calculated value (total_scans - blocked_prs) / total_scans
+            # Calculate in Python after fetching since it's a property
+            pass
         else:
-            query = query.order_by(sort_column)
+            sort_column = getattr(Repository, sort_by)
+            if order == "desc":
+                query = query.order_by(desc(sort_column))  # type: ignore
+            else:
+                query = query.order_by(sort_column)  # type: ignore
         
         # Get total count
         total = query.count()
         
         # Apply pagination
         repos = query.offset(offset).limit(limit).all()
+        
+        # Sort by pass_rate in Python if needed
+        if sort_by == "pass_rate":
+            repos = sorted(repos, key=lambda r: r.pass_rate, reverse=(order == "desc"))
         
         return {
             "total": total,
@@ -248,7 +301,7 @@ async def get_repo_analytics(
                     "total_issues": r.total_issues,
                     "blocked_prs": r.blocked_prs,
                     "pass_rate": r.pass_rate,
-                    "last_scan_at": r.last_scan_at.isoformat() if r.last_scan_at else None,
+                    "last_scan_at": r.last_scan_at.isoformat() if r.last_scan_at is not None else None,
                     "is_active": r.is_active,
                 }
                 for r in repos
@@ -302,7 +355,7 @@ async def get_engineer_analytics(
                     "blocked_prs": e.blocked_prs,
                     "total_issues_introduced": e.total_issues_introduced,
                     "issues_fixed": e.issues_fixed,
-                    "last_activity_at": e.last_activity_at.isoformat() if e.last_activity_at else None,
+                    "last_activity_at": e.last_activity_at.isoformat() if e.last_activity_at is not None else None,
                 }
                 for e in engineers
             ]
@@ -373,7 +426,7 @@ async def get_security_champions(
         champions = db.query(Engineer).filter(
             Engineer.total_prs >= 5  # Minimum 5 PRs to qualify
         ).order_by(
-            desc(Engineer.security_score)
+            desc(Engineer.security_score)  # type: ignore
         ).limit(limit).all()
         
         return {
@@ -386,9 +439,9 @@ async def get_security_champions(
                     "security_score": e.security_score,
                     "total_prs": e.total_prs,
                     "clean_prs": e.clean_prs,
-                    "clean_rate": round((e.clean_prs / e.total_prs * 100), 2) if e.total_prs > 0 else 100,
+                    "clean_rate": round((int(e.clean_prs) / int(e.total_prs) * 100), 2) if (e.total_prs is not None and int(e.total_prs) > 0) else 100.0,  # type: ignore
                     "issues_fixed": e.issues_fixed,
-                    "badge": get_champion_badge(e.security_score),
+                    "badge": get_champion_badge(float(e.security_score) if isinstance(e.security_score, (int, float)) else 0.0),
                 }
                 for idx, e in enumerate(champions)
             ]
@@ -489,7 +542,7 @@ async def get_issue_patterns(
 # WEBHOOK HANDLERS
 # =============================================================================
 
-def verify_github_signature(payload: bytes, signature: str) -> bool:
+def verify_github_signature(payload: bytes, signature: Optional[str]) -> bool:
     """
     Verify GitHub webhook signature using HMAC SHA256
     """
@@ -614,25 +667,42 @@ def save_scan_result(
         )
         db.add(issue)
     
-    # Update repository stats
-    repo.total_scans += 1
-    repo.total_issues += len(scan_result.get('issues', []))
+    # Update repository stats - SQLAlchemy handles these assignments correctly
+    current_scans = repo.total_scans or 0
+    current_issues = repo.total_issues or 0
+    current_blocked = repo.blocked_prs or 0
+    
+    repo.total_scans = current_scans + 1  # type: ignore
+    repo.total_issues = current_issues + len(scan_result.get('issues', []))  # type: ignore
     if action_str == 'BLOCK':
-        repo.blocked_prs += 1
-    repo.last_scan_at = datetime.utcnow()
+        repo.blocked_prs = current_blocked + 1  # type: ignore
+    repo.last_scan_at = datetime.utcnow()  # type: ignore
     
     # Update engineer stats
-    engineer.total_prs += 1
+    current_total_prs = engineer.total_prs or 0
+    current_clean = engineer.clean_prs or 0
+    current_warned = engineer.warned_prs or 0
+    current_blocked_prs = engineer.blocked_prs or 0
+    current_issues_intro = engineer.total_issues_introduced or 0
+    
+    engineer.total_prs = current_total_prs + 1  # type: ignore
     if action_str == 'PASS':
-        engineer.clean_prs += 1
+        engineer.clean_prs = current_clean + 1  # type: ignore
     elif action_str == 'WARN':
-        engineer.warned_prs += 1
+        engineer.warned_prs = current_warned + 1  # type: ignore
     elif action_str == 'BLOCK':
-        engineer.blocked_prs += 1
-    engineer.total_issues_introduced += len(scan_result.get('issues', []))
+        engineer.blocked_prs = current_blocked_prs + 1  # type: ignore
+    engineer.total_issues_introduced = current_issues_intro + len(scan_result.get('issues', []))  # type: ignore
     engineer.update_security_score()
     
-    db.commit()
+    try:
+        db.commit()
+        logger.debug(f"✅ Committed scan result for PR #{pr_number} in {repo_name}")
+    except Exception as e:
+        logger.error(f"❌ Failed to commit scan result: {e}", exc_info=True)
+        db.rollback()
+        raise
+    
     return scan
 
 
@@ -648,6 +718,10 @@ async def github_webhook(
     GitHub webhook endpoint - receives PR events
     """
     logger.info(f"📨 Received webhook - Event: {x_github_event}, Delivery: {x_github_delivery}")
+    
+    # Initialize variables for error handling
+    repo_name: Optional[str] = None
+    pr_sha: Optional[str] = None
     
     try:
         payload_bytes = await request.body()
@@ -685,6 +759,10 @@ async def github_webhook(
         pr_url = pr_data['html_url']
         branch = pr_data['head']['ref']
         
+        # Ensure these are strings (they should be from payload)
+        if not isinstance(repo_name, str) or not isinstance(pr_sha, str):
+            raise HTTPException(status_code=400, detail="Invalid payload: missing required fields")
+        
         logger.info(f"📋 PR Details: {repo_name} PR #{pr_number} by @{pr_author}")
         
         if not is_repo_allowed(repo_name):
@@ -700,6 +778,9 @@ async def github_webhook(
                 "status": "ignored",
                 "reason": f"Action '{action}' does not trigger scanning",
             }
+        
+        if not github_client:
+            raise HTTPException(status_code=503, detail="GitHub client not initialized")
         
         logger.info("⏳ Setting pending status...")
         github_client.set_commit_status(
@@ -775,7 +856,9 @@ async def github_webhook(
             )
             logger.info("✅ Scan result saved to database")
         except Exception as e:
-            logger.error(f"⚠️ Failed to save scan result: {e}")
+            logger.error(f"⚠️ Failed to save scan result: {e}", exc_info=True)
+            # Re-raise to ensure webhook fails if save fails
+            raise HTTPException(status_code=500, detail=f"Failed to save scan result: {str(e)}")
         
         if action_taken == 'BLOCK':
             github_client.set_commit_status(
@@ -825,14 +908,105 @@ async def github_webhook(
         logger.error(f"❌ Unexpected error processing webhook: {e}", exc_info=True)
         
         try:
-            if 'repo_name' in locals() and 'pr_sha' in locals():
+            if github_client and 'repo_name' in locals() and 'pr_sha' in locals() and repo_name and pr_sha:
                 github_client.set_commit_status(
                     repo_name, pr_sha, 'error', '⚠️ Internal error during scan'
                 )
-        except:
+        except Exception:
             pass
         
         raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+
+
+@app.get("/api/webhook/diagnostics")
+async def webhook_diagnostics():
+    """
+    Diagnostic endpoint to verify webhook configuration.
+    Returns webhook endpoint info and configuration status.
+    """
+    try:
+        webhook_secret_configured = bool(config.webhook_secret)
+        github_client_configured = github_client is not None
+        allowed_repos = config.allowed_repos
+        
+        # Get base URL from request (if available)
+        import os
+        base_url = os.getenv('BACKEND_URL', 'http://localhost:8000')
+        
+        return {
+            "status": "ok",
+            "webhook_endpoint": f"{base_url}/webhook/github",
+            "configuration": {
+                "webhook_secret_configured": webhook_secret_configured,
+                "webhook_secret_length": len(config.webhook_secret) if config.webhook_secret else 0,
+                "github_token_configured": bool(config.github_token),
+                "github_client_initialized": github_client_configured,
+                "allowed_repos": allowed_repos,
+                "allowed_repos_count": len(allowed_repos),
+            },
+            "instructions": {
+                "github_setup": "Go to your repository → Settings → Webhooks → Add webhook",
+                "payload_url": f"{base_url}/webhook/github",
+                "content_type": "application/json",
+                "events": ["pull_request"],
+                "secret_required": True,
+            },
+            "health": {
+                "backend": "operational",
+                "database": check_database_health(),
+            }
+        }
+    except Exception as e:
+        logger.error(f"Webhook diagnostics error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/scans/test")
+async def test_scan_endpoint(db: Session = Depends(get_db)):
+    """
+    Test endpoint to verify scan tracking is working.
+    Returns current scan statistics.
+    """
+    try:
+        total_scans = db.query(func.count(ScanResult.id)).scalar() or 0
+        total_repos = db.query(func.count(Repository.id)).scalar() or 0
+        total_engineers = db.query(func.count(Engineer.id)).scalar() or 0
+        
+        recent_scans = db.query(ScanResult).order_by(
+            desc(ScanResult.created_at)
+        ).limit(10).all()
+        
+        return {
+            "status": "ok",
+            "statistics": {
+                "total_scans": total_scans,
+                "total_repositories": total_repos,
+                "total_engineers": total_engineers,
+            },
+            "recent_scans": [
+                {
+                    "id": s.id,
+                    "repo": s.repo_id,
+                    "pr_number": s.pr_number,
+                    "action": s.action.value,
+                    "issues_count": s.issues_count,
+                    "created_at": s.created_at.isoformat() if hasattr(s, 'created_at') and s.created_at is not None else None,  # type: ignore
+                }
+                for s in recent_scans
+            ],
+            "repositories": [
+                {
+                    "id": r.id,
+                    "total_scans": r.total_scans,
+                    "total_issues": r.total_issues,
+                    "last_scan_at": r.last_scan_at.isoformat() if r.last_scan_at is not None else None,
+                }
+                for r in db.query(Repository).all()
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Test endpoint error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # For local testing

@@ -1,5 +1,5 @@
 # app/email_client.py
-
+import html
 import os
 import logging
 from dotenv import load_dotenv
@@ -51,52 +51,36 @@ def send_security_email(recipient: str, alert_data: dict) -> bool:
     if not SENDGRID_API_KEY or not FROM_EMAIL:
         logger.error("❌ SendGrid not configured (missing API key or FROM_EMAIL)")
         return False
-
-    # Extract and validate data
     pr_url = alert_data.get('pr_url', '#')
-    severity = alert_data.get('severity', 'high').lower()
-    action = alert_data.get('action', 'REVIEW').upper()
+    if not pr_url.startswith(('http://', 'https://')):
+        pr_url = '#'
+
+    severity = html.escape(str(alert_data.get('severity', 'high')).lower())
+    action = html.escape(str(alert_data.get('action', 'REVIEW')).upper())
     issues_count = alert_data.get('issues_count', 0)
-    repo = alert_data.get('repo', 'Unknown Repository')
-    branch = alert_data.get('branch', 'Unknown Branch')
-    author = alert_data.get('author', 'Unknown Author')
-    incident = alert_data.get('incident', 'Security Policy Violation')
+    repo = html.escape(str(alert_data.get('repo', 'Unknown Repository')))
+    branch = html.escape(str(alert_data.get('branch', 'Unknown Branch')))
+    author = html.escape(str(alert_data.get('author', 'Unknown Author')))
+    incident = html.escape(str(alert_data.get('incident', 'Security Policy Violation')))
+    time_str = html.escape(str(alert_data.get('time', '')))
     
-    # Get timestamp
-    time_str = alert_data.get('time')
-    if not time_str:
-        now_utc = datetime.now(timezone.utc)
-        now_ist = now_utc + timedelta(hours=5, minutes=30)
-        time_str = f"{now_ist.strftime('%Y-%m-%d')} | {now_ist.strftime('%H:%M:%S IST')}"
-    
-    # Severity configuration
+    summary_jp = html.escape(str(alert_data.get('summary_jp', 'N/A')))
+    summary_en = html.escape(str(alert_data.get('summary_en', 'N/A')))
+    fix = html.escape(str(alert_data.get('fix', 'Refer to security guidelines.')))
+    diff = html.escape(str(alert_data.get('diff', 'N/A')))
+    issues_summary = html.escape(str(alert_data.get('issues_summary', '')))
+
+    # Truncate content (using escaped strings)
+    if len(fix) > 1000: fix = fix[:997] + "..."
+    if len(diff) > 1500: diff = diff[:1497] + "..."
+
+    # 3. Severity configuration (Matches CSS logic)
     severity_config = {
-        'critical': {
-            'indicator': '🔴',
-            'label': 'CRITICAL',
-            'color': '#DC143C',
-            'bg_color': '#FFF0F0'
-        },
-        'high': {
-            'indicator': '🟠',
-            'label': 'HIGH',
-            'color': '#FF8C00',
-            'bg_color': '#FFF5E6'
-        },
-        'medium': {
-            'indicator': '🟡',
-            'label': 'MEDIUM',
-            'color': '#FFD700',
-            'bg_color': '#FFFEF0'
-        },
-        'low': {
-            'indicator': '🟢',
-            'label': 'LOW',
-            'color': '#32CD32',
-            'bg_color': '#F0FFF0'
-        }
+        'critical': {'indicator': '🔴', 'label': 'CRITICAL', 'color': '#DC143C', 'bg_color': '#FFF0F0'},
+        'high': {'indicator': '🟠', 'label': 'HIGH', 'color': '#FF8C00', 'bg_color': '#FFF5E6'},
+        'medium': {'indicator': '🟡', 'label': 'MEDIUM', 'color': '#FFD700', 'bg_color': '#FFFEF0'},
+        'low': {'indicator': '🟢', 'label': 'LOW', 'color': '#32CD32', 'bg_color': '#F0FFF0'}
     }
-    
     sev = severity_config.get(severity, severity_config['high'])
     
     # Action status mapping

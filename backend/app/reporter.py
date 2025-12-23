@@ -9,7 +9,8 @@ from app.email_client import send_security_email
 logger = logging.getLogger(__name__)
 
 # Security admin email - receives all security alerts
-SECURITY_ADMIN_EMAIL = os.getenv("SECURITY_ADMIN_EMAIL", "vanshikhashri@gmail.com")
+# Set SECURITY_ADMIN_EMAIL env var to receive email notifications
+SECURITY_ADMIN_EMAIL = os.getenv("SECURITY_ADMIN_EMAIL")
 
 def report_security_issue(scan_result: dict, pr_url: str | None = None):
     """
